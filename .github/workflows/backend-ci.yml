@@ -5,14 +5,33 @@ on:
     branches:
       - main
       - master
+    paths:
+      - '.github/workflows/backend-ci.yml'
+      - 'apps/**'
+      - 'libs/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.json'
+      - 'nx.json'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - '.github/workflows/backend-ci.yml'
+      - 'apps/**'
+      - 'libs/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.json'
+      - 'nx.json'
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: backend-ci-${{ github.ref }}
@@ -27,6 +46,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -43,16 +64,35 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Set Nx SHAs
+        uses: nrwl/nx-set-shas@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::861638088375:role/github-actions-deploy-role
+          aws-region: ${{ secrets.AWS_REGION }}
+
       - name: Verify Nx projects
         run: pnpm nx show projects
 
       - name: Typecheck workspace
         run: pnpm tsc -p tsconfig.json --noEmit
 
-      - name: Typecheck each backend app
+      - name: Typecheck affected backend apps
         run: |
           set -euo pipefail
-          for tsconfig in apps/*/tsconfig.app.json; do
+          AFFECTED=$(pnpm nx show projects --affected --base="$NX_BASE" --head="$NX_HEAD")
+          APP_COUNT=0
+          for app in $AFFECTED; do
+            tsconfig="apps/$app/tsconfig.app.json"
+            if [ ! -f "$tsconfig" ]; then
+              continue
+            fi
             echo "Checking $tsconfig"
             pnpm tsc -p "$tsconfig" --noEmit
+            APP_COUNT=$((APP_COUNT + 1))
           done
+          if [ "$APP_COUNT" -eq 0 ]; then
+            echo "No affected backend app tsconfig detected; skipping app-level typecheck."
+          fi
